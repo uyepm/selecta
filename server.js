@@ -45,7 +45,8 @@ const server=http.createServer((req,res)=>{
       if(b.op==="get"){send(res,200,{exists:!!d,data:d?d.data:null});return;}
       if(b.op==="set"){
         if(d&&d.lease&&d.lease.until>Date.now()&&d.lease.owner!==b.cid){send(res,200,{ok:false,locked:true});return;}
-        DOCS.set(p,{data:b.data,lease:d?d.lease:null});notify(p);send(res,200,{ok:true});return;
+        // a write by the lease owner releases the lease — write IS the release
+        DOCS.set(p,{data:b.data,lease:null});notify(p);send(res,200,{ok:true});return;
       }
       if(b.op==="delete"){DOCS.delete(p);notify(p);send(res,200,{ok:true});return;}
       if(b.op==="acquire"){
