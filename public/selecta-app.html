@@ -1392,8 +1392,8 @@ const HTTPDB={
   }
 };
 function netMyName(){
-  let n=null;try{n=localStorage.getItem("selecta_name");}catch(e){}
-  if(!n){n=(prompt("Your table name?")||"").trim().slice(0,12)||("DJ-"+Math.floor(Math.random()*90+10));try{localStorage.setItem("selecta_name",n);}catch(e){}}
+  let n=null;try{n=localStorage.getItem("selecta_name2");}catch(e){}
+  if(!n){n=(prompt("Your name? (this is how other players see you)")||"").trim().slice(0,12)||("DJ-"+Math.floor(Math.random()*90+10));try{localStorage.setItem("selecta_name2",n);}catch(e){}}
   return n;
 }
 /* ============ NET M2 — lobby, seats, deal, live preview ============ */
@@ -1547,7 +1547,7 @@ async function startTable(){
   S.players=players;
   NET.ver=(d.v|0);
   const pub=publicFromS();
-  pub.phase="play";pub.host=NET.me;pub.seats=d.seats;pub.deal=deal;
+  pub.v=(d.v|0)+1;pub.phase="play";pub.host=NET.me;pub.seats=d.seats;pub.deal=deal;
   await gref(NET.gid).set(pub);
 }
 function mySeatIdx(doc){return (doc.players||[]).findIndex(q=>q&&q.uid===NET.me);}
@@ -1571,6 +1571,13 @@ async function onPlayDoc(doc){
   enterLive(doc,mi);
 }
 function enterLive(doc,mi){
+  const dv=doc.v|0;
+  if(NET.on){
+    if(NET.pendingW>0){NET.defer=doc;return;}
+    if(NET.lastV!=null&&dv<=NET.lastV)return;
+  }
+  NET.lastV=dv;
+  const selfEcho=!!(doc.lastAction&&doc.lastAction.aid&&doc.lastAction.aid===NET.myAid);
   NET.on=true;NET.freeze=false;NET.seat=Math.max(0,mi);
   $("lobbyov").classList.remove("on");$("startov").classList.remove("on");
   fetchNames((doc.players||[]).map(q=>q&&q.uid));
@@ -1591,7 +1598,7 @@ function enterLive(doc,mi){
     }
   }
   netPickup(doc);
-  if(!(NET.driving)){applyPublic(doc,NET.hand,NET.seat);netNames();}
+  if(!NET.driving&&!selfEcho){applyPublic(doc,NET.hand,NET.seat);netNames();}
   if(S.over&&!NET.winShown){
     NET.winShown=true;
     const w=(doc.winner!=null&&(doc.players||[])[doc.winner])?doc.players[doc.winner]:null;
@@ -1608,7 +1615,14 @@ function enterLive(doc,mi){
 /* ============ NET M3 — turns over the database ============ */
 NET.pend={logs:[],fx:null};NET.replay=false;NET.driving=false;NET.q=Promise.resolve();
 NET.lastAid=null;NET.got={};NET.reqDrawing=false;NET.serving=false;NET.winShown=false;NET.botBusy=false;NET.rot=0;
-function qwrite(fn){NET.q=NET.q.then(fn).catch(e=>{});return NET.q;}
+function qwrite(fn){
+  NET.pendingW=(NET.pendingW|0)+1;
+  NET.q=NET.q.then(fn).catch(e=>{}).finally(()=>{
+    NET.pendingW--;
+    if(NET.pendingW<=0&&NET.defer){const d=NET.defer;NET.defer=null;try{enterLive(d,mySeatIdx(d));}catch(e){}}
+  });
+  return NET.q;
+}
 function sanLog(h){return escapeHtml(String(h)).replace(/&lt;(\/?b)&gt;/g,"<$1>");}
 function netNames(){S.players.forEach(p=>{if(p.human&&p.uid){const nn=(NET.names[p.uid]||"").toUpperCase().slice(0,10);p.name=p.uid===NET.me?"YOU":(nn||String(p.name||"PLAYER").toUpperCase().slice(0,10));}});}
 function netToast(who,card,verb){try{const tt=$("toast");tt.innerHTML=`<span class="who">${escapeHtml(who)} · ${escapeHtml(verb)}</span><div class="tc">${faceHTML(card)}</div>`;tt.classList.add("on");setTimeout(()=>tt.classList.remove("on"),1500);}catch(e){}}
@@ -1620,7 +1634,7 @@ function collectAct(extraFxs){
 function netPush(){
   if(!NET.on)return;
   const me=S.players[0];const handSan=me.hand.map(sanCard).filter(Boolean);
-  const act=collectAct();
+  const act=collectAct();NET.myAid=act.aid;
   qwrite(async()=>{
     try{
       await NET.db.doc(`data/users/${NET.me}/hand_${NET.gid}`).set({cards:handSan});
@@ -1727,7 +1741,7 @@ async function hostBots(doc){
     const bh={};
     S.players.forEach((p,ri)=>{if(!p.human){bh[(ri+rot)%N]=p.hand.map(sanCard).filter(Boolean);}});
     await dref.set({deck:S.deck.map(sanCard).filter(Boolean),botHands:bh});
-    const act={aid:Math.random().toString(36).slice(2),by:-1,logs:NET.pend.logs.splice(0),fxs};
+    const act={aid:Math.random().toString(36).slice(2),by:-1,logs:NET.pend.logs.splice(0),fxs};NET.myAid=act.aid;
     await withLease(gref(NET.gid),c2=>{
       if(!c2)return null;
       const pub=derot(publicFromS());
