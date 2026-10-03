@@ -1,0 +1,50 @@
+name: apply-patches
+on:
+  push:
+    branches: [main]
+    paths: ["patches/queue/**"]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: apply queued patches
+        run: |
+          python3 - <<'PYEOF'
+          import os,sys,subprocess,glob
+          HTML="public/selecta-app.html"
+          APPLIED="patches/applied.txt"
+          done=set()
+          if os.path.exists(APPLIED):
+              done={l.strip() for l in open(APPLIED) if l.strip()}
+          todo=[q for q in sorted(glob.glob("patches/queue/*.py")) if os.path.basename(q) not in done]
+          if not todo:
+              print("nothing to apply");sys.exit(0)
+          src=open(HTML,encoding="utf-8").read()
+          for q in todo:
+              ns={}
+              exec(compile(open(q,encoding="utf-8").read(),q,"exec"),ns)
+              for old,new in ns.get("SUBS",[]):
+                  if old not in src:
+                      print("FATAL missing anchor in",q,":",repr(old[:80]));sys.exit(1)
+                  src=src.replace(old,new)
+              print("applied",q)
+          open(HTML,"w",encoding="utf-8").write(src)
+          check=r'''const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8");const m=s.match(/<script>[\s\S]*?<\/script>/g);for(const b of m){const body=b.replace(/<\/?script[^>]*>/g,"");if(!body.trim())continue;new Function(body.replace(/"use strict";/,"return;"));}console.log("parse ok");'''
+          if subprocess.run(["node","-e",check,HTML]).returncode!=0:
+              print("FATAL parse check failed");sys.exit(1)
+          with open(APPLIED,"a") as f:
+              for q in todo:f.write(os.path.basename(q)+"\n")
+          print("done")
+          PYEOF
+      - name: commit result
+        run: |
+          git config user.name "selecta-patchbot"
+          git config user.email "patchbot@users.noreply.github.com"
+          git add public/selecta-app.html patches/applied.txt
+          git diff --cached --quiet || git commit -m "patchbot: apply queued patches"
+          git push
